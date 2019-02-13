@@ -1,5 +1,6 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
+#include <opencv2/tracking.hpp>
 
 constexpr auto LowWindows = "原视频";
 constexpr auto fangsheWindows = "仿射变换";
@@ -15,16 +16,24 @@ int g_Canny = 100;//边缘检测因子
 int g_zuizhi = 10;//方框面积滑动条值
 int g_zuizhiMax = 100;//最大描绘方框面积
 bool fangshe = false;//是否开启仿射变换
+bool genzong =false;//是否开启描绘ROI区域
+Rect2d g_ROI;//跟踪模型
 Rect g_rectangle;//记录鼠标位置
 int g_click = 0;//点击次数
+
+Mat dstImg;//仿射后图像
 
 vector<vector<Point>>contours;
 vector<Vec4i> hierarchy;
 Point2f srcTriangle[4];
 Point2f dstTriangle[4];
 
+//创建跟踪模型
+Ptr<TrackerMOSSE> tracker = TrackerMOSSE::create();
+
 void on_zuizhi(int, void*);
-void on_click(int event, int x, int y, int flags, void* param);
+void on_click_Low(int event, int x, int y, int flags, void* param);
+void on_click_fangshe(int event, int x, int y, int flags, void* param);
 
 int main() {
 
@@ -33,17 +42,23 @@ int main() {
 	VideoCapture capture(0);
 	capture >> srcimg;
 
+	
+	
+
 	if (!srcimg.data) { cout << "图片错误" << endl; cv::waitKey(0); return -1; }
 
 	//创建视图窗口
 	namedWindow(LowWindows, WINDOW_NORMAL);
+	namedWindow(fangsheWindows, WINDOW_NORMAL);
 	namedWindow(NowWindows, WINDOW_NORMAL);
 
 	//初始化鼠标位置参数
 	g_rectangle = Rect(-1, -1, 0, 0);
+	g_ROI = Rect2d(-1, -1, 0, 0);
 
 	//创建鼠标回调事件
-	setMouseCallback(LowWindows, on_click, (void*)&srcimg);
+	setMouseCallback(LowWindows, on_click_Low);
+	setMouseCallback(fangsheWindows, on_click_fangshe);
 
 	//创建进度条回调事件
 	createTrackbar("阀值", NowWindows, &g_Canny, 254, NULL);
@@ -63,25 +78,13 @@ int main() {
 
 		Mat threshold_output;
 		Mat warpMat;
-		Mat dstImg;
+		
 
 		//逆时针旋转90度
 		//transpose(srcimg, srcimg);
 		//flip(srcimg, srcimg, 0);
 
-		
-
-		if (fangshe)//如果开始仿射
-		{
-			warpMat = getAffineTransform(srcTriangle, dstTriangle);
-			warpAffine(srcimg, dstImg, warpMat, dstImg.size());
-		}else {
-			dstImg = srcimg;
-		}
-
-		imshow(fangsheWindows, dstImg);
-
-		//描绘点击的点
+				//描绘点击的点
 		if (fangshe||g_click) {//为0时不进行描绘
 
 			for (size_t i = 0; i < g_click; i++)
@@ -91,6 +94,26 @@ int main() {
 		}
 		
 		imshow(LowWindows, srcimg);
+
+
+		if (fangshe)//如果开始仿射
+		{
+			warpMat = getAffineTransform(srcTriangle, dstTriangle);
+			warpAffine(srcimg, dstImg, warpMat, dstImg.size());
+		}else {
+			dstImg = srcimg;
+		}
+
+		if(!genzong)
+			tracker->update(dstImg, g_ROI);//跟踪目标对象
+
+		//描绘ROI矩形
+		if (g_ROI.width > 0 && g_ROI.height > 0)
+			rectangle(dstImg, g_ROI, Scalar(255, 0, 0), 2, 1);
+
+		imshow(fangsheWindows, dstImg);
+
+
 
 		//转换成灰度图
 		cvtColor(dstImg, grayimg, COLOR_BGR2GRAY);
@@ -121,7 +144,6 @@ int main() {
 				rectangle(grayimg, boundRect[i].tl(), boundRect[i].br(), Scalar(0, 255, 0), 2, 8, 0);
 		}
 
-		//imshow(LowWindows, LowSrcimg);
 		imshow(NowWindows, grayimg);
 
 
@@ -141,8 +163,8 @@ void on_zuizhi(int, void*) {
 
 }
 
-void on_click(int event, int x, int y, int flags, void* param) {
-	Mat& image = *(cv::Mat*)param;
+void on_click_Low(int event, int x, int y, int flags, void* param) {//原视频窗口的点击事件，点4个点确定仿射点
+	
 
 	switch (event)
 	{
@@ -171,5 +193,48 @@ void on_click(int event, int x, int y, int flags, void* param) {
 			fangshe = false;
 			break;
 	}
+
+}
+
+void on_click_fangshe(int event, int x, int y, int flags, void* param) {//选择ROI区域
+
+	switch (event)
+	{
+		case EVENT_MOUSEMOVE://鼠标移动
+
+			if (genzong) {//是否进行记录
+				g_ROI.width = x - g_ROI.x;
+				g_ROI.height = y - g_ROI.y;
+
+				if (g_ROI.width < 0) {
+					g_ROI.x += g_ROI.width;
+					g_ROI.width *= -1;
+				}
+
+				if (g_ROI.height < 0) {
+					g_ROI.y += g_ROI.height;
+					g_ROI.height *= -1;
+				}
+
+				
+			}
+
+			break;
+			
+		case EVENT_LBUTTONDOWN://鼠标按下
+
+			genzong = true;
+			g_ROI = Rect(x, y, 0, 0);//记录起始点
+
+			break;
+
+		case EVENT_LBUTTONUP://鼠标弹起
+
+			genzong = false;
+			tracker->init(dstImg, g_ROI);
+
+			break;
+	}
+
 
 }
