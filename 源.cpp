@@ -1,6 +1,7 @@
 #include <opencv2/opencv.hpp>
 #include <iostream>
 #include <opencv2/tracking.hpp>
+#include "Adbshell.h"
 
 constexpr auto LowWindows = "原视频";
 constexpr auto fangsheWindows = "仿射变换";
@@ -16,7 +17,8 @@ int g_Canny = 100;//边缘检测因子
 int g_zuizhi = 10;//方框面积滑动条值
 int g_zuizhiMax = 100;//最大描绘方框面积
 bool fangshe = false;//是否开启仿射变换
-bool genzong =false;//是否开启描绘ROI区域
+bool Drawgenzong = false;//是否开启描绘ROI区域
+bool genzong = false;//是否开始跟踪
 Rect2d g_ROI;//跟踪模型
 Rect g_rectangle;//记录鼠标位置
 int g_click = 0;//点击次数
@@ -42,9 +44,6 @@ int main() {
 	VideoCapture capture(0);
 	capture >> srcimg;
 
-	
-	
-
 	if (!srcimg.data) { cout << "图片错误" << endl; cv::waitKey(0); return -1; }
 
 	//创建视图窗口
@@ -66,50 +65,61 @@ int main() {
 
 	//仿射变换参数初始化
 	dstTriangle[0] = Point2f(0, 0);
-	dstTriangle[1] = Point2f(static_cast<float>(srcimg.cols - 1),0);
+	dstTriangle[1] = Point2f(static_cast<float>(srcimg.cols - 1), 0);
 	dstTriangle[2] = Point2f(0, static_cast<float>(srcimg.rows - 1));
 	dstTriangle[3] = Point2f(static_cast<float>(srcimg.cols - 1), static_cast<float>(srcimg.rows - 1));
 
-	while (true)
-	{
+	
+	CAdbshell shell;
+	if (shell.Start()) {
+		cout << "启动成功" << endl;
+		if (shell.RunCmd("dumpsys battery")) {
+			cout << "发送成功" << endl;
+		}
+		shell.Stop();
+		cout << "adb:" << shell.GetOutput() << endl;
+	}
+	
+	
+	
+
+	while (true) {
 
 		Mat grayimg;
 		capture >> srcimg;
 
 		Mat threshold_output;
 		Mat warpMat;
-		
+
 
 		//逆时针旋转90度
 		//transpose(srcimg, srcimg);
 		//flip(srcimg, srcimg, 0);
 
-				//描绘点击的点
-		if (fangshe||g_click) {//为0时不进行描绘
+		//描绘点击的点
+		if (fangshe || g_click) {//为0时不进行描绘
 
-			for (size_t i = 0; i < g_click; i++)
-			{
+			for (size_t i = 0; i < g_click; i++) {
 				circle(srcimg, srcTriangle[i], 3, Scalar(0, 0, 255), -1);
 			}
 		}
-		
+
 		imshow(LowWindows, srcimg);
 
 
-		if (fangshe)//如果开始仿射
-		{
+		if (fangshe){//如果开始仿射
 			warpMat = getAffineTransform(srcTriangle, dstTriangle);
 			warpAffine(srcimg, dstImg, warpMat, dstImg.size());
-		}else {
+		} else {
 			dstImg = srcimg;
 		}
 
-		if(!genzong)
-			tracker->update(dstImg, g_ROI);//跟踪目标对象
+		//描绘ROI区域
+		//if (!Drawgenzong)
+		rectangle(dstImg, g_ROI, Scalar(255, 0, 0), 2, 1);
 
-		//描绘ROI矩形
-		if (g_ROI.width > 0 && g_ROI.height > 0)
-			rectangle(dstImg, g_ROI, Scalar(255, 0, 0), 2, 1);
+		if (genzong)
+			tracker->update(dstImg, g_ROI);//跟踪目标对象
 
 		imshow(fangsheWindows, dstImg);
 
@@ -129,14 +139,12 @@ int main() {
 		vector<Rect>boundRect(contours.size());
 
 		//记录轮廓
-		for (size_t i = 0; i < contours.size(); i++)
-		{
+		for (size_t i = 0; i < contours.size(); i++) {
 			approxPolyDP(Mat(contours[i]), contours_poly[i], 3, true);
 			boundRect[i] = boundingRect(Mat(contours_poly[i]));
 		}
 
-		for (size_t i = 0; i < contours.size(); i++)
-		{
+		for (size_t i = 0; i < contours.size(); i++) {
 			//描绘轮廓
 			drawContours(grayimg, contours_poly, i, Scalar(0, 255, 0), 1, 8, vector<Vec4i>(), 0, Point());
 			//选择描绘特定大值轮廓边框
@@ -164,28 +172,25 @@ void on_zuizhi(int, void*) {
 }
 
 void on_click_Low(int event, int x, int y, int flags, void* param) {//原视频窗口的点击事件，点4个点确定仿射点
-	
 
-	switch (event)
-	{
+	switch (event) {
 		case EVENT_LBUTTONUP://左键弹起
-			
+
 			cout << g_click << endl;
 
 			if (g_click < 4) {//1~4时保存
 				fangshe = false;
 				srcTriangle[g_click] = Point2f(static_cast<float>(x), static_cast<float>(y));
 				g_click++;
-			}
-			else { 
+			} else {
 				g_click = 0;
-				
+
 			}
 
 			if (g_click >= 4) {
 				fangshe = true;
 			}
-			
+
 			break;
 
 		case EVENT_RBUTTONDOWN://右键按下
@@ -198,11 +203,10 @@ void on_click_Low(int event, int x, int y, int flags, void* param) {//原视频窗口
 
 void on_click_fangshe(int event, int x, int y, int flags, void* param) {//选择ROI区域
 
-	switch (event)
-	{
+	switch (event) {
 		case EVENT_MOUSEMOVE://鼠标移动
 
-			if (genzong) {//是否进行记录
+			if (Drawgenzong) {//是否进行记录
 				g_ROI.width = x - g_ROI.x;
 				g_ROI.height = y - g_ROI.y;
 
@@ -216,22 +220,31 @@ void on_click_fangshe(int event, int x, int y, int flags, void* param) {//选择RO
 					g_ROI.height *= -1;
 				}
 
-				
+
 			}
 
 			break;
-			
-		case EVENT_LBUTTONDOWN://鼠标按下
 
-			genzong = true;
-			g_ROI = Rect(x, y, 0, 0);//记录起始点
+		case EVENT_LBUTTONDOWN://左键按下
+
+			Drawgenzong = true;
+			g_ROI = Rect2d(x, y, 0, 0);//记录起始点
+			cout << x << "," << y << endl;
 
 			break;
 
-		case EVENT_LBUTTONUP://鼠标弹起
+		case EVENT_LBUTTONUP://左键弹起
 
-			genzong = false;
+			genzong = true;
+			Drawgenzong = false;
 			tracker->init(dstImg, g_ROI);
+
+			break;
+
+		case EVENT_RBUTTONDOWN://右键按下
+
+			g_ROI = Rect2d(-1, -1, 0, 0);
+			genzong = false;
 
 			break;
 	}
