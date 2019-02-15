@@ -2,6 +2,8 @@
 #include <iostream>
 #include <opencv2/tracking.hpp>
 #include "Adbshell.h"
+#include <librealsense2/rs.hpp>
+#include "cv-helpers.hpp"
 
 constexpr auto LowWindows = "原视频";
 constexpr auto fangsheWindows = "仿射变换";
@@ -10,8 +12,13 @@ constexpr auto NowWindows = "处理后视频";
 constexpr auto PhoneW = 1920;//手机分辨率
 constexpr auto PhoneH = 1080;//手机分辨率
 
+using namespace rs2;
 using namespace cv;
 using namespace std;
+
+const size_t inWidth = 700;
+const size_t inHeight = 480;
+const float WHRatio = inWidth / (float)inHeight;
 
 int g_Canny = 100;//边缘检测因子
 int g_zuizhi = 10;//方框面积滑动条值
@@ -31,7 +38,7 @@ Point2f srcTriangle[4];
 Point2f dstTriangle[4];
 
 //创建跟踪模型
-Ptr<TrackerMOSSE> tracker = TrackerMOSSE::create();
+Ptr<TrackerTLD> tracker = TrackerTLD::create();
 
 void on_zuizhi(int, void*);
 void on_click_Low(int event, int x, int y, int flags, void* param);
@@ -41,15 +48,37 @@ int main() {
 
 	Mat srcimg = imread("1.jpg");
 
-	VideoCapture capture(0);
-	capture >> srcimg;
+	//VideoCapture capture(0);
+	//capture >> srcimg;
 
 	if (!srcimg.data) { cout << "图片错误" << endl; cv::waitKey(0); return -1; }
 
+	// 从英特尔实感摄像头获取视频流
+	pipeline pipe;
+	auto config = pipe.start();
+	auto profile = config.get_stream(RS2_STREAM_COLOR)
+		.as<video_stream_profile>();
+
+	rs2::align align_to(RS2_STREAM_COLOR);
+
+	Size cropSize;
+	if (profile.width() / (float)profile.height() > WHRatio) {
+		cropSize = Size(static_cast<int>(profile.height() * WHRatio),
+						profile.height());
+	} else {
+		cropSize = Size(profile.width(),
+						static_cast<int>(profile.width() / WHRatio));
+	}
+
+	Rect crop(Point((profile.width() - cropSize.width) / 2,
+		(profile.height() - cropSize.height) / 2),
+			  cropSize);
+
+
 	//创建视图窗口
-	namedWindow(LowWindows, WINDOW_NORMAL);
-	namedWindow(fangsheWindows, WINDOW_NORMAL);
-	namedWindow(NowWindows, WINDOW_NORMAL);
+	namedWindow(LowWindows, WINDOW_AUTOSIZE);
+	namedWindow(fangsheWindows, WINDOW_AUTOSIZE);
+	namedWindow(NowWindows, WINDOW_AUTOSIZE);
 
 	//初始化鼠标位置参数
 	g_rectangle = Rect(-1, -1, 0, 0);
@@ -80,17 +109,34 @@ int main() {
 		cout << "adb:" << shell.GetOutput() << endl;
 	}
 	
-	
-	
 
 	while (true) {
 
 		Mat grayimg;
-		capture >> srcimg;
+		//capture >> srcimg;
 
 		Mat threshold_output;
 		Mat warpMat;
 
+		// 等待下一帧数据
+		auto data = pipe.wait_for_frames();
+		// 确保框架在空间上对齐
+		data = align_to.process(data);
+
+		auto color_frame = data.get_color_frame();
+
+		// 如果没接收到数据，跳出
+		static int last_frame_number = 0;
+		if (color_frame.get_frame_number() == last_frame_number) continue;
+		last_frame_number = color_frame.get_frame_number();
+
+		// 把 RealSense 转换为 OpenCV 阵列:
+		auto color_mat = frame_to_mat(color_frame);
+
+		// Crop both color and depth frames
+		color_mat = color_mat(crop);
+
+		//imshow("？？？", color_mat);
 
 		//逆时针旋转90度
 		//transpose(srcimg, srcimg);
@@ -100,18 +146,18 @@ int main() {
 		if (fangshe || g_click) {//为0时不进行描绘
 
 			for (size_t i = 0; i < g_click; i++) {
-				circle(srcimg, srcTriangle[i], 3, Scalar(0, 0, 255), -1);
+				circle(color_mat, srcTriangle[i], 3, Scalar(0, 0, 255), -1);
 			}
 		}
 
-		imshow(LowWindows, srcimg);
+		imshow(LowWindows, color_mat);
 
 
 		if (fangshe){//如果开始仿射
 			warpMat = getAffineTransform(srcTriangle, dstTriangle);
-			warpAffine(srcimg, dstImg, warpMat, dstImg.size());
+			warpAffine(color_mat, dstImg, warpMat, color_mat.size());
 		} else {
-			dstImg = srcimg;
+			dstImg = color_mat;
 		}
 
 		//描绘ROI区域
@@ -155,7 +201,7 @@ int main() {
 		imshow(NowWindows, grayimg);
 
 
-		waitKey(10);
+		waitKey(1);
 
 	}
 
@@ -198,7 +244,6 @@ void on_click_Low(int event, int x, int y, int flags, void* param) {//原视频窗口
 			fangshe = false;
 			break;
 	}
-
 }
 
 void on_click_fangshe(int event, int x, int y, int flags, void* param) {//选择ROI区域
@@ -248,6 +293,4 @@ void on_click_fangshe(int event, int x, int y, int flags, void* param) {//选择RO
 
 			break;
 	}
-
-
 }
